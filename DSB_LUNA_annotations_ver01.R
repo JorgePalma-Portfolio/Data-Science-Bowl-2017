@@ -1,0 +1,122 @@
+
+library(plot3D)
+library(plotly)
+library(data.table)
+library(manipulate)
+library(EBImage)
+library(abind)
+
+# returns string w/o leading or trailing whitespace
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+
+normalizePlanes <- function (npzarray){
+  
+  maxHU <- 400.00
+  minHU <- -1000.00
+  
+  npzarray <-  (npzarray - minHU) / (maxHU - minHU)
+  npzarray[npzarray > 1] <- 1.00
+  npzarray[npzarray < 0] <- 0.00
+  
+  return(npzarray)
+}
+
+imageline <- 5
+
+candidate   <- read.csv("input/LUNA/candidate.csv",header = F, stringsAsFactors = F)
+annotations <-  read.csv("input/LUNA/annotations.csv",header = T, stringsAsFactors = F)
+
+
+viewer <- function(imageline){
+  
+  rawfile <- paste0(annotations$seriesuid[imageline],".raw")
+  mhdfile <- paste0(annotations$seriesuid[imageline],".mhd")
+  
+  filepath <- "D:/R Development/Data Science Bowl 2017/input/LUNA/files/"
+  
+  readtext.filename <- file(paste0(filepath,mhdfile), "rt")
+  textdata <- readLines(readtext.filename)
+  
+  splittext <- strsplit(textdata,"[=]")
+  mhdvars <- data.table(matrix(unlist(splittext), nrow=length(splittext), ncol=2, byrow=T))
+  
+  offsetvar      <- as.numeric(unlist(strsplit(trim(mhdvars[V1 %like% "Offset", ]$V2)," ")))
+  ElementSpacing <- as.numeric(unlist(strsplit(trim(mhdvars[V1 %like% "ElementSpacing", ]$V2)," ")))
+  DimSize        <- as.numeric(unlist(strsplit(trim(mhdvars[V1 %like% "DimSize", ]$V2)," ")))
+  
+  blobsize <- DimSize[1]*DimSize[2]*DimSize[3]
+  
+  # Create a connection object to read the file in binary mode using "rb".
+  readbin.filename  <- file(paste0(filepath,rawfile), "rb")
+  bindata  <- readBin(readbin.filename, integer(),  size=2,n = blobsize)
+  
+  close(readbin.filename)
+  close(readtext.filename)
+  
+  spacing     <- ElementSpacing
+  new_spacing <- c(1,1,1)
+  image.shape <- DimSize
+  
+  resize_factor  <- spacing / new_spacing
+  new_real_shape <- round(image.shape * resize_factor,0)
+  new_shape      <- round(new_real_shape,0)
+  
+  real_resize_factor <- new_shape / image.shape
+  new_spacing        <- spacing / real_resize_factor
+  
+  worldCoord <- data.matrix(annotations[imageline,c(2,3,4)])
+  
+  voxelCoord <- worldCoord
+  stretchedVoxelCoord <- abs(worldCoord[1,] - offsetvar)
+  voxelCoord[1,] <- stretchedVoxelCoord / ElementSpacing
+  
+  dim(bindata) <- DimSize
+  
+  imageList <- list()
+  
+  for( i in 1:dim(bindata)[3]){
+    imageList[[i]] <- resize(bindata[,,i],new_real_shape[1],new_real_shape[1])
+  }  
+  newImage <- abind( imageList, along=3 )
+  
+  if (ElementSpacing[3] != 1){
+    
+    imageList <- list()
+    for( i in 1:dim(newImage)[2]){
+      imageList[[i]] <- resize(newImage[,i,],new_real_shape[2],new_real_shape[3])
+    }
+    
+    newImage2 <- abind(imageList, along=3)
+    dim(newImage2)
+    imageList <- list()
+    for( i in 1:dim(newImage2)[2]){
+      imageList[[i]] <- newImage2[,i,]
+    }
+    
+    newImage <- abind(imageList, along=3)
+    dim(newImage)
+  }
+  
+  #originalWith <- 65 * ElementSpacing[1]
+  #voxelWidth <- round(originalWith/2,0)
+  voxelWidth <- 20
+  
+  x1 <- round(voxelCoord[1,1] * ElementSpacing[1],0)-voxelWidth
+  x2 <- round(voxelCoord[1,1] * ElementSpacing[1],0)+voxelWidth
+  y1 <- round(voxelCoord[1,2] * ElementSpacing[2],0)-voxelWidth
+  y2 <- round(voxelCoord[1,2] * ElementSpacing[2],0)+voxelWidth
+    
+  z  <- round(voxelCoord[1,3] * ElementSpacing[3],0)
+
+  newImage <- normalizePlanes(newImage[,,z])
+ 
+  image(1:nrow(newImage),1:ncol(newImage),newImage,col=grey(0:255/255))
+    
+  cat( voxelWidth, round(voxelCoord[1,1],0) , round(voxelCoord[1,2]) ,round(voxelCoord[1,3],0),annotations[imageline,5],"\n")
+
+  rect(x1,y1, x2,y2,border="red")
+}
+
+manipulate(viewer(imageline), imageline = slider(1, nrow(annotations), step = 1) )
+
+
